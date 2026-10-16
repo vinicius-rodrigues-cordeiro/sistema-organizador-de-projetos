@@ -1,1 +1,1 @@
-# sistema-cadastro-alunos
+# sistema-organizador-de-projetos
