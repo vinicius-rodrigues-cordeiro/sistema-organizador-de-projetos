@@ -2,6 +2,9 @@
 
 ItemProjeto (componente) -> Tarefa (folha) | Composto -> Fase, Projeto (compostos).
 A mesma operação progresso() vale em qualquer nível da árvore.
+
+Cada tarefa tem um percentual de 0 a 100, de 10 em 10. O status é consequência dele:
+0 = pendente, 10 a 90 = em andamento, 100 = concluída. Fase e projeto mostram a média.
 """
 import uuid
 
@@ -33,7 +36,7 @@ class ItemProjeto:
         self.nome = nome
 
     def contagem(self):
-        """(tarefas concluídas, total de tarefas) dentro deste item."""
+        """(pontos concluídos, total de tarefas): cada tarefa vale de 0 a 1 ponto."""
         raise NotImplementedError
 
     def progresso(self):
@@ -48,18 +51,24 @@ class Tarefa(ItemProjeto):
     """Folha."""
     tipo = "tarefa"
 
-    def __init__(self, id, nome, status="pendente", responsavel=""):
+    def __init__(self, id, nome, percentual=0, responsavel=""):
         super().__init__(id, nome)
-        self.status = status
+        self.percentual = percentual      # 0, 10, 20 ... 100
         self.responsavel = responsavel
 
+    @property
+    def status(self):
+        if self.percentual == 0:
+            return "pendente"
+        return "concluida" if self.percentual == 100 else "em_andamento"
+
     def contagem(self):
-        return (1 if self.status == "concluida" else 0), 1
+        return self.percentual / 100, 1
 
     def para_dict(self):
         return {"id": self.id, "tipo": "tarefa", "nome": self.nome,
-                "status": self.status, "responsavel": self.responsavel,
-                "progresso": self.progresso()}
+                "percentual": self.percentual, "status": self.status,
+                "responsavel": self.responsavel, "progresso": self.progresso()}
 
 
 class Composto(ItemProjeto):
@@ -152,4 +161,7 @@ def _item_de_dict(d):
         fase = Fase(d["id"], d["nome"])
         fase.itens = [_item_de_dict(i) for i in d.get("itens", [])]
         return fase
-    return Tarefa(d["id"], d["nome"], d.get("status", "pendente"), d.get("responsavel", ""))
+    percentual = d.get("percentual")
+    if percentual is None:                # dados antigos, que só tinham o status
+        percentual = {"concluida": 100, "em_andamento": 10}.get(d.get("status"), 0)
+    return Tarefa(d["id"], d["nome"], percentual, d.get("responsavel", ""))

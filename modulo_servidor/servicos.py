@@ -77,6 +77,8 @@ class ServicoProjetos:
                 raise ErroNaoEncontrado("Fase pai não encontrada.")
             if not isinstance(pai, Composto):
                 raise ErroValidacao("Uma tarefa não pode conter outros itens.")
+            if tipo == "tarefa" and pai is projeto:
+                raise ErroValidacao("Toda tarefa deve ficar dentro de uma fase. Crie uma fase primeiro.")
             if tipo == "fase":
                 pai.adicionar(Fase(novo_id(), nome))
             else:
@@ -99,9 +101,7 @@ class ServicoProjetos:
                                      versao, mutacao).para_dict()
 
     def mudar_status(self, usuario, item_id, corpo, versao):
-        status = corpo.get("status")
-        if status not in STATUS_VALIDOS:
-            raise ErroValidacao(f"Status inválido. Use: {', '.join(STATUS_VALIDOS)}.")
+        percentual = self._percentual(corpo)
 
         def mutacao(projeto):
             item = projeto.buscar(item_id)
@@ -109,9 +109,22 @@ class ServicoProjetos:
                 raise ErroNaoEncontrado("Item não encontrado.")
             if not isinstance(item, Tarefa):
                 raise ErroValidacao("Só tarefas têm status.")
-            item.status = status
-        return self.mediador.alterar(usuario, f"marcou tarefa como {status}",
+            item.percentual = percentual
+        return self.mediador.alterar(usuario, f"colocou uma tarefa em {percentual}%",
                                      self.projeto_do_item(item_id), versao, mutacao).para_dict()
+
+    @staticmethod
+    def _percentual(corpo):
+        """Aceita 'percentual' (0 a 100, de 10 em 10) ou o 'status' antigo."""
+        if "percentual" in corpo:
+            p = corpo["percentual"]
+            if isinstance(p, bool) or not isinstance(p, int) or p < 0 or p > 100 or p % 10 != 0:
+                raise ErroValidacao("O percentual deve ser de 0 a 100, de 10 em 10.")
+            return p
+        status = corpo.get("status")
+        if status not in STATUS_VALIDOS:
+            raise ErroValidacao(f"Status inválido. Use: {', '.join(STATUS_VALIDOS)}.")
+        return {"pendente": 0, "em_andamento": 10, "concluida": 100}[status]
 
     def excluir_item(self, usuario, item_id, versao):
         def mutacao(projeto):

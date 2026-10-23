@@ -117,6 +117,16 @@ class TestHierarquiaEProgresso(TestBase):
                               json={"tipo": "banana", "nome": "x", "versao": p["versao"]})
         self.assertEqual(r.status_code, 422)
 
+    def test_tarefa_sem_fase_422(self):
+        p = self.criar()
+        r = self.cliente.post(f"/projetos/{p['id']}/itens", headers=self.a,
+                              json={"tipo": "tarefa", "nome": "solta", "versao": p["versao"]})
+        self.assertEqual(r.status_code, 422)
+        self.assertIn("fase", r.get_json()["erro"])
+        atual = self.cliente.get(f"/projetos/{p['id']}", headers=self.a).get_json()
+        self.assertEqual(atual["itens"], [])              # nada foi gravado
+        self.assertEqual(atual["versao"], p["versao"])
+
     def test_ca07_progresso_recalculado(self):
         p = self.criar(fases=[{"nome": "F1", "tarefas": ["A", "B"]}])
         a, b = self.tarefas(p)
@@ -126,6 +136,31 @@ class TestHierarquiaEProgresso(TestBase):
         self.assertEqual(p["itens"][0]["progresso"], 50)
         p = self.status(b["id"], "concluida", p["versao"]).get_json()
         self.assertEqual(p["progresso"], 100)
+
+    def percentual(self, item_id, valor, versao):
+        return self.cliente.put(f"/itens/{item_id}/status",
+                                json={"percentual": valor, "versao": versao}, headers=self.a)
+
+    def test_percentual_de_10_em_10(self):
+        p = self.criar(fases=[{"nome": "F1", "tarefas": ["A", "B"]}])
+        a, b = self.tarefas(p)
+        p = self.percentual(a["id"], 10, p["versao"]).get_json()
+        self.assertEqual(self.tarefas(p)[0]["status"], "em_andamento")
+        self.assertEqual(p["progresso"], 5)           # média de 10% e 0%
+        p = self.percentual(a["id"], 100, p["versao"]).get_json()
+        self.assertEqual(self.tarefas(p)[0]["status"], "concluida")
+        self.assertEqual(p["progresso"], 50)
+        p = self.percentual(b["id"], 50, p["versao"]).get_json()
+        self.assertEqual(p["progresso"], 75)          # média de 100% e 50%
+        self.assertEqual(p["itens"][0]["progresso"], 75)
+        p = self.percentual(a["id"], 0, p["versao"]).get_json()
+        self.assertEqual(self.tarefas(p)[0]["status"], "pendente")
+
+    def test_percentual_invalido_422(self):
+        p = self.criar(fases=[{"nome": "F1", "tarefas": ["A"]}])
+        a = self.tarefas(p)[0]
+        for valor in (15, 110, -10, "50", True):
+            self.assertEqual(self.percentual(a["id"], valor, p["versao"]).status_code, 422)
 
     def test_status_invalido_422(self):
         p = self.criar(fases=[{"nome": "F1", "tarefas": ["A"]}])

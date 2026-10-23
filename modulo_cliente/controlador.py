@@ -66,6 +66,7 @@ class ControladorCliente(QObject):
         self.api = api
         self.usuario = usuario
         self.projeto = None                      # projeto aberto (dict)
+        self._mutando = False                    # evita dois cliques seguidos com versão velha
         self.estado = EstadoConexao.CARREGANDO
         self.atualizador = Atualizador(api)
         self.atualizador.respondeu.connect(self._servidor_ok)
@@ -173,20 +174,30 @@ class ControladorCliente(QObject):
 
     # ---------- itens e dependências (sempre sobre o projeto aberto) ----------
     def _mutar(self, metodo, caminho, corpo=None):
-        self.api.requisitar(metodo, caminho, corpo,
-                            lambda s, d: self._tratar(s, d, self._definir_projeto))
+        if self._mutando:
+            return
 
-    def criar_item(self, tipo, nome, pai_id=None):
+        def resposta(status, dados):
+            self._mutando = False
+            self._tratar(status, dados, self._definir_projeto)
+        self._mutando = True
+        self.api.requisitar(metodo, caminho, corpo, resposta)
+
+    def criar_item(self, tipo, nome, pai_id=None, responsavel=""):
         p = self.projeto
         self._mutar("POST", f"/projetos/{p['id']}/itens",
-                    {"tipo": tipo, "nome": nome, "pai_id": pai_id, "versao": p["versao"]})
+                    {"tipo": tipo, "nome": nome, "pai_id": pai_id,
+                     "responsavel": responsavel, "versao": p["versao"]})
 
-    def renomear_item(self, item_id, nome):
-        self._mutar("PUT", f"/itens/{item_id}", {"nome": nome, "versao": self.projeto["versao"]})
+    def renomear_item(self, item_id, nome, responsavel=None):
+        corpo = {"nome": nome, "versao": self.projeto["versao"]}
+        if responsavel is not None:          # só tarefas têm responsável
+            corpo["responsavel"] = responsavel
+        self._mutar("PUT", f"/itens/{item_id}", corpo)
 
-    def mudar_status(self, item_id, status):
+    def mudar_percentual(self, item_id, percentual):
         self._mutar("PUT", f"/itens/{item_id}/status",
-                    {"status": status, "versao": self.projeto["versao"]})
+                    {"percentual": percentual, "versao": self.projeto["versao"]})
 
     def excluir_item(self, item_id):
         self._mutar("DELETE", f"/itens/{item_id}?versao={self.projeto['versao']}")

@@ -204,7 +204,6 @@ class JanelaPrincipal(QMainWindow):
 
 class ArvoreDeItens(QMainWindow):
     """Tarefas.ui: fases e tarefas em árvore, com progresso e dependências."""
-    PROXIMO = {"pendente": "em_andamento", "em_andamento": "concluida", "concluida": "pendente"}
     ROTULO = {"pendente": "pendente", "em_andamento": "em andamento", "concluida": "concluída"}
 
     def __init__(self, controlador):
@@ -217,21 +216,23 @@ class ArvoreDeItens(QMainWindow):
         self.listView.hide()
         self.arvore = QTreeWidget(self.centralwidget)
         self.arvore.setGeometry(250, 0, 550, 540)
-        self.arvore.setColumnCount(4)
-        self.arvore.setHeaderLabels(["Item", "Status", "Progresso", "Depende de"])
-        self.arvore.setColumnWidth(0, 220)
+        self.arvore.setColumnCount(5)
+        self.arvore.setHeaderLabels(["Item", "Status", "Progresso", "Responsável", "Depende de"])
+        self.arvore.setColumnWidth(0, 170)
+        self.arvore.setColumnWidth(3, 90)
         self.arvore.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         # botões extras (os três primeiros vêm do Designer)
         self.botao_fase = self._botao("Criar Fase", 270)
         self.botao_status = self._botao("Avançar Status", 360)
         self.botao_dep = self._botao("Dependência", 450)
+        self.botao_pessoas = self._botao("Pessoas", 0)
         self.botao_editar_fase = self._botao("Editar Fase", 0)
         self.pushButton_2.setText("Editar Tarefa")
         self.pushButton_3.setText("Excluir")
         botoes = [self.pushButton, self.pushButton_2, self.pushButton_3, self.botao_fase,
-                  self.botao_editar_fase, self.botao_status, self.botao_dep]
+                  self.botao_editar_fase, self.botao_status, self.botao_dep, self.botao_pessoas]
         for i, botao in enumerate(botoes):
-            botao.setGeometry(0, i * 76, 251, 76)
+            botao.setGeometry(0, i * 66, 251, 66)
         self.pushButton.clicked.connect(self.criar_tarefa)
         self.pushButton_2.clicked.connect(self.editar_tarefa)
         self.pushButton_3.clicked.connect(self.excluir)
@@ -239,6 +240,7 @@ class ArvoreDeItens(QMainWindow):
         self.botao_editar_fase.clicked.connect(self.editar_fase)
         self.botao_status.clicked.connect(self.avancar_status)
         self.botao_dep.clicked.connect(self.criar_dependencia)
+        self.botao_pessoas.clicked.connect(self.mostrar_pessoas)
         self.tarefas = {}
         controlador.projeto_mudou.connect(self.exibir)
         controlador.projeto_removido.connect(self._removido)
@@ -281,10 +283,11 @@ class ArvoreDeItens(QMainWindow):
         for i in itens:
             status = self.ROTULO[i["status"]] if i["tipo"] == "tarefa" else "fase"
             item = QTreeWidgetItem(pai, [i["nome"], status, f"{i['progresso']}%",
+                                         i.get("responsavel") or "",
                                          ", ".join(depende.get(i["id"], []))])
             item.setData(0, ID, i["id"])
             item.setData(0, TIPO, i["tipo"])
-            item.setData(0, STATUS, i.get("status"))
+            item.setData(0, STATUS, i.get("percentual"))
             if i["tipo"] == "fase":
                 self._montar(item, i["itens"], depende)
 
@@ -313,17 +316,48 @@ class ArvoreDeItens(QMainWindow):
         if nome:
             self.controlador.criar_item("fase", nome)
 
+    def _pedir_responsavel(self, atual=""):
+        """Escolhe entre as pessoas do projeto. Devolve None se o usuário cancelar."""
+        projeto = self.controlador.projeto
+        nomes = [p["nome"] for p in projeto.get("pessoas", [])]
+        if projeto.get("responsavel") and projeto["responsavel"] not in nomes:
+            nomes.insert(0, projeto["responsavel"])
+        if atual and atual not in nomes:
+            nomes.append(atual)
+        opcoes = ["(ninguém)"] + nomes
+        posicao = opcoes.index(atual) if atual in opcoes else 0
+        escolha, ok = QInputDialog.getItem(self, "Responsável", "Responsável pela tarefa:",
+                                           opcoes, posicao, False)
+        if not ok:
+            return None
+        return "" if escolha == "(ninguém)" else escolha
+
     def criar_tarefa(self):
-        nome = self._pedir_nome("Criar tarefa", "Nome da tarefa:")
-        if not nome:
-            return
         pai_id, sel = None, self.arvore.currentItem()
         if sel is not None:
             if sel.data(0, TIPO) == "fase":
                 pai_id = sel.data(0, ID)
             elif sel.parent() is not None:
                 pai_id = sel.parent().data(0, ID)
-        self.controlador.criar_item("tarefa", nome, pai_id)
+        if pai_id is None:
+            self.statusBar().showMessage("Selecione uma fase para criar a tarefa (ou crie uma fase antes).", 6000)
+            return
+        nome = self._pedir_nome("Criar tarefa", "Nome da tarefa:")
+        if not nome:
+            return
+        responsavel = self._pedir_responsavel()
+        if responsavel is None:
+            return
+        self.controlador.criar_item("tarefa", nome, pai_id, responsavel)
+
+    def mostrar_pessoas(self):
+        projeto = self.controlador.projeto
+        linhas = [f"Responsável pelo projeto: {projeto.get('responsavel') or '—'}", "", "Pessoas envolvidas:"]
+        for p in projeto.get("pessoas", []):
+            linhas.append(f"  • {p['nome']} — {p.get('cargo') or 'sem cargo'}")
+        if not projeto.get("pessoas"):
+            linhas.append("  (nenhuma)")
+        QMessageBox.information(self, "Pessoas do projeto", "\n".join(linhas))
 
     def editar_tarefa(self):
         self._renomear("tarefa")
@@ -339,7 +373,14 @@ class ArvoreDeItens(QMainWindow):
             self.statusBar().showMessage(f"Selecione uma {tipo}.", 4000)
             return
         nome = self._pedir_nome(f"Editar {tipo}", "Novo nome:", sel.text(0))
-        if nome:
+        if not nome:
+            return
+        if tipo == "tarefa":
+            responsavel = self._pedir_responsavel(sel.text(3))
+            if responsavel is None:
+                return
+            self.controlador.renomear_item(sel.data(0, ID), nome, responsavel)
+        else:
             self.controlador.renomear_item(sel.data(0, ID), nome)
 
     def excluir(self):
@@ -357,7 +398,9 @@ class ArvoreDeItens(QMainWindow):
         if sel.data(0, TIPO) != "tarefa":
             self.statusBar().showMessage("Só tarefas têm status.", 4000)
             return
-        self.controlador.mudar_status(sel.data(0, ID), self.PROXIMO[sel.data(0, STATUS)])
+        atual = sel.data(0, STATUS)          # percentual atual da tarefa
+        novo = 0 if atual >= 100 else atual + 10
+        self.controlador.mudar_percentual(sel.data(0, ID), novo)
 
     def criar_dependencia(self):
         sel = self._selecionado()
@@ -367,8 +410,26 @@ class ArvoreDeItens(QMainWindow):
             self.statusBar().showMessage("Selecione uma tarefa.", 4000)
             return
         origem = sel.data(0, ID)
-        opcoes = {f"{nome}  [{i}]": i for i, nome in self.tarefas.items()}
+        outras = {i: nome for i, nome in self.tarefas.items() if i != origem}
+        if not outras:
+            self.statusBar().showMessage("Não há outra tarefa para escolher.", 4000)
+            return
+        repetidos = {n for n in outras.values() if list(outras.values()).count(n) > 1}
+        opcoes = {}
+        for i, nome in outras.items():
+            rotulo = nome if nome not in repetidos else f"{nome} ({self._fase_de(i)})"
+            opcoes[rotulo] = i
         escolha, ok = QInputDialog.getItem(self, "Dependência", f"'{sel.text(0)}' depende de:",
                                            list(opcoes), 0, False)
         if ok:
             self.controlador.adicionar_dependencia(origem, opcoes[escolha])
+
+    def _fase_de(self, tarefa_id):
+        """Nome da fase que contém a tarefa (para diferenciar tarefas com o mesmo nome)."""
+        it = QTreeWidgetItemIterator(self.arvore)
+        while it.value():
+            if it.value().data(0, ID) == tarefa_id:
+                pai = it.value().parent()
+                return pai.text(0) if pai is not None else "sem fase"
+            it += 1
+        return "?"
