@@ -39,6 +39,12 @@ def criar_app(pasta_dados=None):
 
 
 if __name__ == "__main__":
+    import socket
     app = criar_app()
-    print("Servidor em http://127.0.0.1:5000")
-    app.run(host="127.0.0.1", port=5000)
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+    except OSError:
+        ip = "127.0.0.1"
+    print("Servidor nesta máquina:   http://127.0.0.1:5000")
+    print(f"Para outras máquinas:     http://{ip}:5000")
+    app.run(host="0.0.0.0", port=5000)
