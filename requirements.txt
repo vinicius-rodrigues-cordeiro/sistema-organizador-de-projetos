@@ -1,0 +1,2 @@
+Flask
+PyQt6
