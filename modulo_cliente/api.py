@@ -6,7 +6,7 @@ Toda resposta chega por callback(status, dados); status 0 = sem conexão.
 import json
 
 from PyQt6.QtCore import QObject, QUrl, QByteArray
-from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkProxy, QNetworkRequest
 
 TEMPO_LIMITE_MS = 5000
 
@@ -20,6 +20,8 @@ class ClienteApi(QObject):
         self.base = endereco
         self.usuario = usuario
         self.gerente = QNetworkAccessManager(self)
+        # fala direto com o servidor, sem passar por proxy da máquina (comum em laboratório)
+        self.gerente.setProxy(QNetworkProxy(QNetworkProxy.ProxyType.NoProxy))
 
     def requisitar(self, metodo, caminho, corpo=None, callback=None):
         pedido = QNetworkRequest(QUrl(self.base + caminho))
@@ -36,6 +38,8 @@ class ClienteApi(QObject):
     def _terminou(self, resposta, callback):
         codigo = resposta.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
         status = int(codigo) if codigo is not None else 0
+        if status == 0:
+            print(f"[rede] sem resposta de {self.base}: {resposta.errorString()}")
         bruto = bytes(resposta.readAll())
         resposta.deleteLater()
         try:
