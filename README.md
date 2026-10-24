@@ -53,7 +53,7 @@ Para testar em uma única máquina, rode o servidor e o cliente nela mesma. Para
 
 ## Quem pode entrar
 
-Só entram os nomes cadastrados em `dados/usuarios.json`. Para liberar uma pessoa, acrescente o nome (exatamente como será digitado, com as mesmas letras maiúsculas e minúsculas) na lista `usuarios` desse arquivo e reinicie o servidor.
+Só entram os nomes cadastrados em `dados/usuarios.json`. Para liberar uma pessoa, acrescente o nome (exatamente como será digitado, com as mesmas letras maiúsculas e minúsculas) na lista `usuarios` desse arquivo. Não precisa reiniciar o servidor.
 
 ## Usando em duas máquinas
 
