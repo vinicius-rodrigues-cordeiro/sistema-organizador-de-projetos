@@ -74,6 +74,16 @@ Testes automatizados do servidor: `python -m unittest discover testes -v`.
 | Estrutural | **Composite** | `modulo_servidor/modelo.py` (`ItemProjeto`, `Tarefa`, `Composto`, `Fase`, `Projeto`) | O progresso é pedido pela mesma operação em qualquer nível e muda em cadeia quando uma tarefa avança. |
 | Comportamental | **Mediator** | `modulo_servidor/mediador.py` (`MediadorColaboracao`) | Ao salvar, a versão avança, o evento é registrado com o nome do autor e o outro usuário o vê na próxima consulta; salvar com versão antiga é recusado (409). |
 
+### 5.1 Observações sobre a aplicação de cada padrão
+
+**Builder.** `ProjetoBuilder` segue o padrão: o projeto é montado por etapas encadeadas (`com_descricao`, `com_responsavel`, `com_pessoas`, `com_fase`) e só é validado e entregue em `construir()`. O serviço de projetos usa o Builder para toda criação.
+
+**Composite.** `ItemProjeto` é o componente, `Tarefa` é a folha e `Fase` e `Projeto` são compostos (por meio de `Composto`). A operação `progresso()` é a mesma em qualquer nível: a tarefa conta o seu percentual e os compostos somam as tarefas que contêm. A dependência entre tarefas não é uma classe do modelo; é um registro guardado na lista de dependências do `Projeto`.
+
+**Mediator.** `MediadorColaboracao` implementa a interface `Mediador` e centraliza a colaboração entre `ControleDeVersao`, `FeedDeAtualizacoes` e o repositório de projetos. Esses três colaboradores não se conhecem nem se chamam: só o mediador conversa com todos. Cada alteração é uma transação feita em ordem: conferir a versão, aplicar a mudança, registrar o evento e gravar.
+
+Há uma diferença em relação ao desenho clássico do padrão: os colaboradores não guardam uma referência ao mediador nem o notificam. O fluxo é sempre iniciado pelo mediador, que chama cada colaborador na ordem. Essa escolha foi feita porque o sistema exige transações atômicas e confirmadas uma de cada vez (RNF06 e RNF07), e uma sequência conduzida por um único ponto deixa a ordem e a atomicidade explícitas. A essência do padrão (centralizar a interação e eliminar o acoplamento entre os colaboradores) é mantida. O comportamento observável está nos testes `test_ca09_atualizacao_visivel_para_outro_usuario` e `test_ca10_conflito_de_versao`.
+
 ## 6. API do servidor
 
 Toda requisição, exceto `GET /saude`, leva o cabeçalho `X-Usuario` com o nome do usuário.
@@ -211,6 +221,7 @@ classDiagram
     Composto o-- ItemProjeto : contém
     Projeto o-- Dependencia
     Dependencia --> Tarefa : origem depende do destino
+    note for Dependencia "Guardada como registro (dicionário) dentro do Projeto"
 ```
 
 ### 7.3 Cliente
@@ -317,7 +328,7 @@ A interface aciona o controlador, que fala com o servidor pelo `ClienteApi`. O `
 ## 9. Testes
 
 - **Automatizados (servidor):** `python -m unittest discover testes -v` executa 25 testes cobrindo projetos, hierarquia, percentual, dependências, colaboração (persistência, versão, falha de gravação) e acesso (401).
-- **Manuais (cliente):** roteiro de demonstração com dois clientes: criar projeto, fase e tarefa; avançar percentual; criar dependência e tentar um ciclo; editar o mesmo projeto em dois clientes para ver o conflito; derrubar e reiniciar o servidor.
+- **Manuais (cliente):** roteiro de demonstração com dois clientes: criar projeto, fase e tarefa; avançar percentual; criar dependência e tentar um ciclo; editar o mesmo projeto em dois clientes para ver o conflito; derrubar e reiniciar o servidor. O passo a passo está no `README.md`.
 
 | Cenário do plano de testes | Cobre |
 |----------------------------|-------|
