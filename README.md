@@ -86,3 +86,20 @@ Executa os 25 testes do servidor (projetos, hierarquia, percentual, dependência
 5. **Avançar Status** sobe a tarefa de 10 em 10 pontos até 100%. Fases e projeto mostram a média.
 6. **Dependência** liga uma tarefa à tarefa da qual ela depende; ciclos são recusados.
 7. Se outra pessoa alterar o mesmo projeto antes de você salvar, o sistema avisa o conflito e você recarrega antes de tentar de novo.
+
+## Roteiro de teste rápido (para conferir o sistema)
+
+Use dois terminais, ambos na pasta do projeto.
+
+1. **Testes automatizados:** `python -m unittest discover testes -v` deve terminar com `Ran 25 tests ... OK`.
+2. **Servidor:** `python modulo_servidor/app.py`. O terminal mostra os endereços e a frase "Os clientes na mesma rede encontram este servidor sozinhos".
+3. **Cliente:** `python modulo_cliente/main.py` em outro terminal. O campo **Servidor** aparece preenchido como "Servidor".
+4. **Acesso:** digite um nome inventado e clique OK: o sistema recusa e a janela continua aberta. Depois entre com um nome de `dados/usuarios.json`.
+5. **Projeto:** clique em Criar Projeto, informe só o nome e conclua. Depois tente criar um sem nome: o sistema avisa o motivo.
+6. **Hierarquia:** abra o projeto, use Criar Fase, selecione a fase e use Criar Tarefa. Tentar criar uma tarefa sem fase é recusado.
+7. **Progresso:** selecione uma tarefa e clique em Avançar Status várias vezes. Sobe de 10 em 10 até 100%, e a fase e o projeto mostram a média.
+8. **Dependência:** crie uma dependência entre duas tarefas. Tente uma da tarefa com ela mesma ou que feche um ciclo: o sistema recusa.
+9. **Colaboração:** abra um segundo cliente (outro terminal, outro nome). Uma alteração feita em um aparece no outro em poucos segundos.
+10. **Conflito:** com os dois clientes no mesmo projeto, altere nos dois sem esperar a atualização. O segundo a salvar recebe o aviso "O projeto foi alterado por ... Recarregue antes de salvar.".
+11. **Persistência:** feche o servidor (Ctrl+C), suba de novo e abra o cliente: os dados continuam.
+12. **Sem servidor:** com o servidor desligado, o cliente mostra "sem conexão com servidor" sem travar.
