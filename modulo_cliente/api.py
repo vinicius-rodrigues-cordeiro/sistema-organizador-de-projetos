@@ -38,8 +38,6 @@ class ClienteApi(QObject):
     def _terminou(self, resposta, callback):
         codigo = resposta.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
         status = int(codigo) if codigo is not None else 0
-        if status == 0:
-            print(f"[rede] sem resposta de {self.base}: {resposta.errorString()}")
         bruto = bytes(resposta.readAll())
         resposta.deleteLater()
         try:
