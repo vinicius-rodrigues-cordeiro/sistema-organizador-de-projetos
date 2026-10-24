@@ -1,22 +1,53 @@
 """Interface PyQt6. As telas vêm da pasta Ui/ (Qt Designer); aqui só ligamos os botões
 e ajustamos o que o Designer não cobre (árvore, textos, botões extras)."""
+import json
 import os
 
 from PyQt6 import uic
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QByteArray, QObject, QSettings, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QStandardItem, QStandardItemModel
-from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QDialogButtonBox, QFormLayout,
-                             QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton,
-                             QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QTreeWidgetItemIterator)
+from PyQt6.QtNetwork import QHostAddress, QNetworkInterface, QUdpSocket
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog, QDialogButtonBox,
+                             QFormLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
+                             QPushButton, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
+                             QTreeWidgetItemIterator)
 
+from api import ClienteApi
 from controlador import EstadoConexao
 
 PASTA_UI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Ui")
+ARQUIVO_USUARIOS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "dados", "usuarios.json")
+PORTA_DESCOBERTA = 5001           # a mesma que o servidor usa para responder
+PERGUNTA = b"ORGANIZADOR?"
+MSG_SEM_ACESSO = ("Usuário não identificado ou não autorizado.\n"
+                  "Entre em contato com a equipe de desenvolvimento ou com o responsável técnico Alex Torquato.")
 ID, TIPO, STATUS = Qt.ItemDataRole.UserRole, Qt.ItemDataRole.UserRole + 1, Qt.ItemDataRole.UserRole + 2
 
 
 def carregar_ui(nome, janela):
     uic.loadUi(os.path.join(PASTA_UI, nome), janela)
+
+
+def perguntar(janela, titulo, texto):
+    """Pergunta Sim/Não em português. Devolve True para Sim."""
+    caixa = QMessageBox(QMessageBox.Icon.Question, titulo, texto, parent=janela)
+    sim = caixa.addButton("Sim", QMessageBox.ButtonRole.YesRole)
+    nao = caixa.addButton("Não", QMessageBox.ButtonRole.NoRole)
+    caixa.setDefaultButton(sim)
+    caixa.setEscapeButton(nao)
+    caixa.exec()
+    return caixa.clickedButton() is sim
+
+
+def nome_cadastrado_na_copia_local(nome):
+    """Usado só quando o servidor está fora do ar: True/False conforme a cópia local da lista
+    de usuários, ou None se não houver cópia para conferir. Quem decide de verdade é o servidor."""
+    try:
+        with open(ARQUIVO_USUARIOS, encoding="utf-8") as arquivo:
+            return nome in json.load(arquivo)["usuarios"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 class BarraDeStatus:
@@ -37,27 +68,176 @@ class BarraDeStatus:
     def aviso(self, texto):
         self.barra.showMessage(texto, 6000)
 
+    def sem_acesso(self):
+        self.rotulo.setText("usuário não autorizado")
+        self.rotulo.setStyleSheet(f"color: {self.CORES[EstadoConexao.SEM_CONEXAO]}; font-weight: bold;")
+
+
+class BuscadorDeServidores(QObject):
+    """Pergunta na rede local quem é servidor e junta as respostas: [(nome, ip, porta), ...]."""
+    terminou = pyqtSignal(list)
+
+    def __init__(self, espera_ms=1200):
+        super().__init__()
+        self.espera_ms = espera_ms
+        self.achados = {}
+        self.soquete = QUdpSocket(self)
+        self.soquete.bind(QHostAddress(QHostAddress.SpecialAddress.AnyIPv4), 0)
+        self.soquete.readyRead.connect(self._ler)
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self._concluir)
+
+    def buscar(self):
+        self.achados = {}
+        destinos = [QHostAddress(QHostAddress.SpecialAddress.Broadcast), QHostAddress("127.0.0.1")]
+        for interface in QNetworkInterface.allInterfaces():
+            for entrada in interface.addressEntries():
+                if not entrada.broadcast().isNull():
+                    destinos.append(entrada.broadcast())
+        for destino in destinos:
+            self.soquete.writeDatagram(QByteArray(PERGUNTA), destino, PORTA_DESCOBERTA)
+        self.timer.start(self.espera_ms)
+
+    def _ler(self):
+        while self.soquete.hasPendingDatagrams():
+            pacote = self.soquete.receiveDatagram()
+            try:
+                info = json.loads(bytes(pacote.data()).decode("utf-8"))
+                if info.get("servico") != "organizador":
+                    continue
+                chave = (str(info["nome"]), int(info["porta"]))
+            except (ValueError, KeyError, TypeError):
+                continue
+            ip = pacote.senderAddress().toString().replace("::ffff:", "")
+            if chave not in self.achados or self.achados[chave].startswith("127."):
+                self.achados[chave] = ip          # prefere o IP da rede ao 127.0.0.1
+
+    def _concluir(self):
+        self.terminou.emit(sorted((nome, ip, porta) for (nome, porta), ip in self.achados.items()))
+
 
 class DialogoLogin(QDialog):
+    """Pede o nome e acha o servidor sozinho; confere o nome antes de abrir o programa."""
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Organizador de Projetos")
-        self.nome = QLineEdit()
-        self.endereco = QLineEdit("127.0.0.1:5000")
+        self.setMinimumWidth(460)
+        self.config = QSettings("Equipe4", "OrganizadorDeProjetos")
+        self.nome = QLineEdit(self._lembrado("nome", ""))
+        self.servidor = QComboBox()
+        self.servidor.setEditable(True)
+        self.servidor.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.servidor.lineEdit().setPlaceholderText("Procurando servidor...")
+        self._reserva = self._lembrado("endereco", "127.0.0.1:5000")   # usado só se nada for encontrado
+        self._digitado = False                   # a pessoa mexeu no campo à mão
+        self.servidor.lineEdit().textEdited.connect(lambda _: setattr(self, "_digitado", True))
+        self.procurar = QPushButton("Procurar de novo")
+        self.procurar.clicked.connect(self._procurar)
+        self.situacao = QLabel("")
+        self.situacao.setStyleSheet("color: #666666;")
+        self.aviso = QLabel("")
+        self.aviso.setWordWrap(True)
         form = QFormLayout(self)
         form.addRow("Seu nome:", self.nome)
-        form.addRow("Endereço do servidor:", self.endereco)
-        botoes = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        botoes.accepted.connect(self._validar)
-        botoes.rejected.connect(self.reject)
-        form.addRow(botoes)
+        form.addRow("Servidor:", self.servidor)
+        form.addRow(self.situacao)
+        form.addRow(self.procurar)
+        form.addRow(self.aviso)
+        self.botoes = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.botoes.accepted.connect(self._validar)
+        self.botoes.rejected.connect(self.reject)
+        form.addRow(self.botoes)
+        self._api = None
+        self.buscador = BuscadorDeServidores()
+        self.buscador.terminou.connect(self._mostrar_servidores)
+        self.repetir = QTimer(self)              # enquanto nenhum servidor aparece, procura de novo
+        self.repetir.setInterval(2500)
+        self.repetir.timeout.connect(self._procurar)
+        self.finished.connect(lambda _: self.repetir.stop())
+        self._procurar()
+        self.repetir.start()
+
+    # ---------- busca do servidor ----------
+    def _procurar(self):
+        self.situacao.setText("Procurando servidores na rede...")
+        self.buscador.buscar()
+
+    def _mostrar_servidores(self, achados):
+        if not achados:
+            self.situacao.setText("Nenhum servidor encontrado. Inicie o servidor (ele aparece aqui sozinho) "
+                                  "ou digite o endereço.")
+            if not self._digitado and self.servidor.count() == 0:
+                self.servidor.addItem("Servidor", self._reserva)   # mostra só "Servidor"; o endereço fica por trás
+                self.servidor.setCurrentIndex(0)
+            return
+        self.repetir.stop()
+        atual = self.servidor.currentText()
+        self.servidor.clear()
+        for numero, (_, ip, porta) in enumerate(achados, start=1):
+            rotulo = "Servidor" if len(achados) == 1 else f"Servidor {numero}"
+            self.servidor.addItem(rotulo, f"{ip}:{porta}")
+        if not self._digitado:
+            self.servidor.setCurrentIndex(0)
+        else:
+            self.servidor.setEditText(atual)
+        quantos = len(achados)
+        self.situacao.setText("1 servidor encontrado." if quantos == 1
+                              else f"{quantos} servidores encontrados. Escolha um na lista.")
+
+    def endereco(self):
+        """IP:porta do item escolhido na lista, ou o que a pessoa digitou."""
+        i = self.servidor.currentIndex()
+        if i >= 0 and self.servidor.currentText() == self.servidor.itemText(i):
+            return self.servidor.itemData(i)
+        return self.servidor.currentText().strip()
+
+    # ---------- entrada ----------
+    def _lembrado(self, chave, padrao):
+        valor = self.config.value(chave, padrao)
+        return str(valor) if valor else padrao
+
+    def _mostrar(self, texto, erro=True):
+        self.aviso.setStyleSheet("color: #c62828;" if erro else "color: #666666;")
+        self.aviso.setText(texto)
 
     def _validar(self):
-        if self.nome.text().strip() and self.endereco.text().strip():
-            self.accept()
+        nome, endereco = self.valores()
+        if not nome:
+            self._mostrar("Digite o seu nome.")
+            return
+        if not endereco:
+            self._mostrar("Escolha o servidor na lista ou digite o endereço.")
+            return
+        self._mostrar("Verificando...", erro=False)
+        self.botoes.button(QDialogButtonBox.StandardButton.Ok).setEnabled(False)
+        self._api = ClienteApi(endereco, nome)
+        self._api.requisitar("GET", "/projetos", callback=self._resposta)
+
+    def _resposta(self, status, dados):
+        self.botoes.button(QDialogButtonBox.StandardButton.Ok).setEnabled(True)
+        if not self.isVisible():             # a pessoa cancelou enquanto verificava
+            return
+        nome, endereco = self.valores()
+        if status == 401:
+            self._mostrar(MSG_SEM_ACESSO)
+            return
+        if status == 0:
+            if nome_cadastrado_na_copia_local(nome) is False:      # nome errado: nem pergunta
+                self._mostrar(MSG_SEM_ACESSO)
+                return
+            if not perguntar(self, "Servidor não encontrado",
+                             "Não foi possível conectar ao servidor.\n\n"
+                             "Abrir mesmo assim? O programa continuará tentando conectar."):
+                self._mostrar("Confira o servidor e tente de novo.")
+                return
+        self.config.setValue("nome", nome)
+        self.config.setValue("endereco", endereco)
+        self.accept()
 
     def valores(self):
-        return self.nome.text().strip(), self.endereco.text().strip()
+        return self.nome.text().strip(), self.endereco()
 
 
 class FormularioProjeto(QMainWindow):
@@ -187,14 +367,12 @@ class JanelaPrincipal(QMainWindow):
         if not sel:
             self.barra.aviso("Selecione um projeto.")
             return
-        resposta = QMessageBox.question(self, "Excluir projeto", f"Excluir o projeto '{sel[2]}'?")
-        if resposta == QMessageBox.StandardButton.Yes:
+        if perguntar(self, "Excluir projeto", f"Excluir o projeto '{sel[2]}'?"):
             self.controlador.excluir_projeto(sel[0], sel[1])
 
     def _nao_autorizado(self, mensagem):
-        QMessageBox.critical(self, "Acesso negado",
-                             f"{mensagem}\nConfira se o nome está em dados/usuarios.json.")
-        QApplication.quit()
+        self.barra.sem_acesso()
+        QMessageBox.warning(self, "Acesso negado", MSG_SEM_ACESSO)
 
     def closeEvent(self, evento):
         if self.arvore is not None:
@@ -387,8 +565,7 @@ class ArvoreDeItens(QMainWindow):
         sel = self._selecionado()
         if sel is None:
             return
-        resposta = QMessageBox.question(self, "Excluir", f"Excluir '{sel.text(0)}'?")
-        if resposta == QMessageBox.StandardButton.Yes:
+        if perguntar(self, "Excluir", f"Excluir '{sel.text(0)}'?"):
             self.controlador.excluir_item(sel.data(0, ID))
 
     def avancar_status(self):
